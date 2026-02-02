@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Selection into Commuting - Roy Model Visualization</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useMemo } = React;
+
+    const CommutingSelectionVisualization = () => {
+      // Model parameters with defaults that show positive selection
+      const [mu0, setMu0] = useState(5.5);      // Base wage at origin
+      const [mu1, setMu1] = useState(6.2);      // Base wage at destination (μ1 > μ0)
+      const [delta0, setDelta0] = useState(1.2); // Return to skill at origin
+      const [delta1, setDelta1] = useState(0.5); // Return to skill at destination (δ0 > δ1)
+      const [muPi, setMuPi] = useState(1.2);     // Fixed commuting cost component
+      const [deltaPi, setDeltaPi] = useState(1.8); // How strongly costs decrease with skill
+      
+      // Preset scenarios
+      const presets = {
+        negative: { mu0: 5.5, mu1: 6.8, delta0: 1.2, delta1: 0.5, muPi: 0.3, deltaPi: 0 },
+        intermediate: { mu0: 5.5, mu1: 6.2, delta0: 1.2, delta1: 0.5, muPi: 1.2, deltaPi: 0.8 },
+        positive: { mu0: 5.5, mu1: 6.2, delta0: 1.2, delta1: 0.5, muPi: 1.2, deltaPi: 1.8 }
+      };
+
+      const applyPreset = (preset) => {
+        const p = presets[preset];
+        setMu0(p.mu0);
+        setMu1(p.mu1);
+        setDelta0(p.delta0);
+        setDelta1(p.delta1);
+        setMuPi(p.muPi);
+        setDeltaPi(p.deltaPi);
+      };
+
+      // Calculate wages and net payoffs
+      const data = useMemo(() => {
+        const points = [];
+        const numPoints = 200;
+        
+        for (let i = 0; i <= numPoints; i++) {
+          const s = i / numPoints * 2; // skill from 0 to 2
+          const lnW0 = mu0 + delta0 * s;
+          const pi = Math.exp(muPi - deltaPi * s);
+          const lnW1minusPi = mu1 + delta1 * s - pi;
+          const gain = lnW1minusPi - lnW0;
+          
+          points.push({
+            skill: s,
+            lnW0,
+            lnW1minusPi,
+            gain,
+            commutes: gain > 0
+          });
+        }
+        return points;
+      }, [mu0, mu1, delta0, delta1, muPi, deltaPi]);
+
+      // Find crossing points
+      const crossings = useMemo(() => {
+        const crosses = [];
+        for (let i = 1; i < data.length; i++) {
+          if ((data[i-1].gain <= 0 && data[i].gain > 0) || 
+              (data[i-1].gain > 0 && data[i].gain <= 0)) {
+            // Linear interpolation to find crossing
+            const t = -data[i-1].gain / (data[i].gain - data[i-1].gain);
+            crosses.push({
+              skill: data[i-1].skill + t * (data[i].skill - data[i-1].skill),
+              type: data[i].gain > 0 ? 'lower' : 'upper'
+            });
+          }
+        }
+        return crosses;
+      }, [data]);
+
+      // Determine selection type
+      const selectionType = useMemo(() => {
+        const firstCommutes = data[0].commutes;
+        const lastCommutes = data[data.length - 1].commutes;
+        const numCrossings = crossings.length;
+        
+        if (numCrossings === 0) {
+          return firstCommutes ? 'All commute' : 'None commute';
+        } else if (numCrossings === 1) {
+          if (firstCommutes && !lastCommutes) return 'Negative Selection';
+          if (!firstCommutes && lastCommutes) return 'Positive Selection';
+        } else if (numCrossings === 2) {
+          if (!firstCommutes && !lastCommutes) return 'Intermediate Selection';
+          if (firstCommutes && lastCommutes) return 'Inverse Intermediate';
+        }
+        return 'Complex Pattern';
+      }, [data, crossings]);
+
+      // SVG dimensions
+      const width = 700;
+      const height = 400;
+      const margin = { top: 40, right: 30, bottom: 60, left: 70 };
+      const plotWidth = width - margin.left - margin.right;
+      const plotHeight = height - margin.top - margin.bottom;
+
+      // Scale functions
+      const minY = Math.min(...data.map(d => Math.min(d.lnW0, d.lnW1minusPi))) - 0.5;
+      const maxY = Math.max(...data.map(d => Math.max(d.lnW0, d.lnW1minusPi))) + 0.5;
+      
+      const xScale = (s) => margin.left + (s / 2) * plotWidth;
+      const yScale = (y) => margin.top + plotHeight - ((y - minY) / (maxY - minY)) * plotHeight;
+
+      // Generate path data
+      const originPath = data.map((d, i) => 
+        `${i === 0 ? 'M' : 'L'} ${xScale(d.skill)} ${yScale(d.lnW0)}`
+      ).join(' ');
+      
+      const destPath = data.map((d, i) => 
+        `${i === 0 ? 'M' : 'L'} ${xScale(d.skill)} ${yScale(d.lnW1minusPi)}`
+      ).join(' ');
+
+      // Selection type colors
+      const selectionColors = {
+        'Negative Selection': '#ef4444',
+        'Intermediate Selection': '#f59e0b',
+        'Positive Selection': '#22c55e',
+        'All commute': '#3b82f6',
+        'None commute': '#6b7280',
+        'Complex Pattern': '#8b5cf6',
+        'Inverse Intermediate': '#ec4899'
+      };
+
+      return (
+        <div className="min-h-screen bg-gray-50 p-6">
+          <div className="max-w-6xl mx-auto">
+            <h1 className="text-2xl font-bold text-gray-800 mb-2 text-center">
+              Selection into Commuting: Roy Model Visualization
+            </h1>
+            <p className="text-gray-600 text-center mb-6">
+              Based on Picado (2026) - Figure 3
+            </p>
+
+            {/* Preset buttons */}
+            <div className="flex justify-center gap-4 mb-6">
+              <button
+                onClick={() => applyPreset('negative')}
+                className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition font-medium shadow-md"
+              >
+                Negative Selection
+              </button>
+              <button
+                onClick={() => applyPreset('intermediate')}
+                className="px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition font-medium shadow-md"
+              >
+                Intermediate Selection
+              </button>
+              <button
+                onClick={() => applyPreset('positive')}
+                className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition font-medium shadow-md"
+              >
+                Positive Selection
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* Main Chart */}
+              <div className="lg:col-span-2 bg-white rounded-xl shadow-lg p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <h2 className="text-lg font-semibold text-gray-700">Wage Equations</h2>
+                  <span 
+                    className="px-3 py-1 rounded-full text-white font-medium text-sm"
+                    style={{ backgroundColor: selectionColors[selectionType] }}
+                  >
+                    {selectionType}
+                  </span>
+                </div>
+                
+                <svg width={width} height={height} className="mx-auto">
+                  {/* Grid lines */}
+                  {[0, 0.5, 1, 1.5, 2].map(s => (
+                    <line
+                      key={`grid-x-${s}`}
+                      x1={xScale(s)}
+                      y1={margin.top}
+                      x2={xScale(s)}
+                      y2={height - margin.bottom}
+                      stroke="#e5e7eb"
+                      strokeDasharray="4"
+                    />
+                  ))}
+                  {Array.from({ length: 6 }, (_, i) => minY + (i / 5) * (maxY - minY)).map((y, idx) => (
+                    <line
+                      key={`grid-y-${idx}`}
+                      x1={margin.left}
+                      y1={yScale(y)}
+                      x2={width - margin.right}
+                      y2={yScale(y)}
+                      stroke="#e5e7eb"
+                      strokeDasharray="4"
+                    />
+                  ))}
+                  
+                  {/* Shaded regions for commuters */}
+                  {crossings.length > 0 && (
+                    <>
+                      {crossings.length === 1 && !data[0].commutes && (
+                        <rect
+                          x={xScale(crossings[0].skill)}
+                          y={margin.top}
+                          width={xScale(2) - xScale(crossings[0].skill)}
+                          height={plotHeight}
+                          fill="#22c55e"
+                          opacity={0.15}
+                        />
+                      )}
+                      {crossings.length === 1 && data[0].commutes && (
+                        <rect
+                          x={margin.left}
+                          y={margin.top}
+                          width={xScale(crossings[0].skill) - margin.left}
+                          height={plotHeight}
+                          fill="#ef4444"
+                          opacity={0.15}
+                        />
+                      )}
+                      {crossings.length === 2 && !data[0].commutes && !data[data.length-1].commutes && (
+                        <rect
+                          x={xScale(crossings[0].skill)}
+                          y={margin.top}
+                          width={xScale(crossings[1].skill) - xScale(crossings[0].skill)}
+                          height={plotHeight}
+                          fill="#f59e0b"
+                          opacity={0.15}
+                        />
+                      )}
+                      {crossings.length === 2 && !data[0].commutes && data[data.length-1].commutes && (
+                        <>
+                          <rect
+                            x={xScale(crossings[0].skill)}
+                            y={margin.top}
+                            width={xScale(crossings[1].skill) - xScale(crossings[0].skill)}
+                            height={plotHeight}
+                            fill="#f59e0b"
+                            opacity={0.15}
+                          />
+                          <rect
+                            x={xScale(crossings[1].skill)}
+                            y={margin.top}
+                            width={xScale(2) - xScale(crossings[1].skill)}
+                            height={plotHeight}
+                            fill="#22c55e"
+                            opacity={0.15}
+                          />
+                        </>
+                      )}
+                    </>
+                  )}
+
+                  {/* Origin wage line */}
+                  <path
+                    d={originPath}
+                    fill="none"
+                    stroke="#3b82f6"
+                    strokeWidth={3}
+                  />
+                  
+                  {/* Destination net wage line */}
+                  <path
+                    d={destPath}
+                    fill="none"
+                    stroke="#ef4444"
+                    strokeWidth={3}
+                  />
+
+                  {/* Crossing point markers */}
+                  {crossings.map((c, i) => (
+                    <g key={i}>
+                      <line
+                        x1={xScale(c.skill)}
+                        y1={margin.top}
+                        x2={xScale(c.skill)}
+                        y2={height - margin.bottom}
+                        stroke="#374151"
+                        strokeWidth={2}
+                        strokeDasharray="6,4"
+                      />
+                      <text
+                        x={xScale(c.skill)}
+                        y={height - margin.bottom + 40}
+                        textAnchor="middle"
+                        fontSize="14"
+                        fontWeight="600"
+                        fill="#374151"
+                      >
+                        {c.type === 'lower' ? 'sL' : 'sU'}
+                      </text>
+                      <circle
+                        cx={xScale(c.skill)}
+                        cy={yScale(data.find(d => Math.abs(d.skill - c.skill) < 0.02)?.lnW0 || 0)}
+                        r={6}
+                        fill="#374151"
+                      />
+                    </g>
+                  ))}
+
+                  {/* Axes */}
+                  <line
+                    x1={margin.left}
+                    y1={height - margin.bottom}
+                    x2={width - margin.right}
+                    y2={height - margin.bottom}
+                    stroke="#374151"
+                    strokeWidth={2}
+                  />
+                  <line
+                    x1={margin.left}
+                    y1={margin.top}
+                    x2={margin.left}
+                    y2={height - margin.bottom}
+                    stroke="#374151"
+                    strokeWidth={2}
+                  />
+
+                  {/* Axis labels */}
+                  <text
+                    x={width / 2}
+                    y={height - 8}
+                    textAnchor="middle"
+                    fontSize="14"
+                    fontWeight="500"
+                    fill="#374151"
+                  >
+                    skill (s)
+                  </text>
+                  <text
+                    x={20}
+                    y={height / 2}
+                    textAnchor="middle"
+                    transform={`rotate(-90, 20, ${height / 2})`}
+                    fontSize="14"
+                    fontWeight="500"
+                    fill="#374151"
+                  >
+                    ln(wage)
+                  </text>
+
+                  {/* X-axis ticks */}
+                  {[0, 0.5, 1, 1.5, 2].map(s => (
+                    <text
+                      key={s}
+                      x={xScale(s)}
+                      y={height - margin.bottom + 20}
+                      textAnchor="middle"
+                      fontSize="12"
+                      fill="#6b7280"
+                    >
+                      {s}
+                    </text>
+                  ))}
+
+                  {/* Y-axis ticks */}
+                  {Array.from({ length: 6 }, (_, i) => minY + (i / 5) * (maxY - minY)).map((y, idx) => (
+                    <text
+                      key={idx}
+                      x={margin.left - 10}
+                      y={yScale(y) + 4}
+                      textAnchor="end"
+                      fontSize="12"
+                      fill="#6b7280"
+                    >
+                      {y.toFixed(1)}
+                    </text>
+                  ))}
+
+                  {/* Legend */}
+                  <g transform={`translate(${margin.left + 10}, ${margin.top + 10})`}>
+                    <rect x={0} y={0} width={170} height={75} fill="white" stroke="#e5e7eb" rx={4} />
+                    <line x1={10} y1={22} x2={40} y2={22} stroke="#3b82f6" strokeWidth={3} />
+                    <text x={50} y={26} fontSize="12" fill="#374151">μ₀ + δ₀s (Origin)</text>
+                    <line x1={10} y1={50} x2={40} y2={50} stroke="#ef4444" strokeWidth={3} />
+                    <text x={50} y={54} fontSize="12" fill="#374151">μ₁ + δ₁s − π (Dest.)</text>
+                  </g>
+                </svg>
+
+                {/* Commuting decision explanation */}
+                <div className="mt-4 p-4 bg-gray-50 rounded-lg">
+                  <p className="text-sm text-gray-700">
+                    <strong>Decision rule:</strong> Workers commute when{' '}
+                    <span className="font-mono bg-gray-200 px-1 rounded">ln(w₁) − π &gt; ln(w₀)</span>
+                    {' '}(red line above blue line)
+                  </p>
+                  <p className="text-sm text-gray-600 mt-1">
+                    π = exp(μ<sub>π</sub> − δ'<sub>π</sub>·s) = time-equivalent commuting cost
+                  </p>
+                </div>
+              </div>
+
+              {/* Controls */}
+              <div className="bg-white rounded-xl shadow-lg p-4">
+                <h2 className="text-lg font-semibold text-gray-700 mb-4">Parameters</h2>
+                
+                {/* Key parameters highlighted */}
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
+                  <h3 className="font-semibold text-amber-800 text-sm mb-2">🔑 Key Controls</h3>
+                  
+                  <div className="mb-3">
+                    <label className="flex justify-between text-sm text-gray-700 mb-1">
+                      <span>Fixed cost (μ<sub>π</sub>):</span>
+                      <span className="font-mono">{muPi.toFixed(2)}</span>
+                    </label>
+                    <input
+                      type="range"
+                      min="0"
+                      max="2"
+                      step="0.05"
+                      value={muPi}
+                      onChange={(e) => setMuPi(parseFloat(e.target.value))}
+                      className="w-full accent-amber-500"
+                    />
+                    <p className="text-xs text-gray-500">↑ Large fixed costs create barrier for low-skill</p>
+                  </div>
+
+                  <div>
+                    <label className="flex justify-between text-sm text-gray-700 mb-1">
+                      <span>Cost decrease rate (δ'<sub>π</sub>):</span>
+                      <span className="font-mono">{deltaPi.toFixed(2)}</span>
+                    </label>
+                    <input
+                      type="range"
+                      min="0"
+                      max="3"
+                      step="0.05"
+                      value={deltaPi}
+                      onChange={(e) => setDeltaPi(parseFloat(e.target.value))}
+                      className="w-full accent-amber-500"
+                    />
+                    <p className="text-xs text-gray-500">↑ Costs decrease faster with skill (car ownership)</p>
+                  </div>
+                </div>
+
+                {/* Wage parameters */}
+                <div className="space-y-3">
+                  <h3 className="font-medium text-gray-600 text-sm border-b pb-1">Origin Wages</h3>
+                  
+                  <div>
+                    <label className="flex justify-between text-sm text-gray-600 mb-1">
+                      <span>Base wage (μ₀):</span>
+                      <span className="font-mono">{mu0.toFixed(2)}</span>
+                    </label>
+                    <input
+                      type="range"
+                      min="4"
+                      max="7"
+                      step="0.1"
+                      value={mu0}
+                      onChange={(e) => setMu0(parseFloat(e.target.value))}
+                      className="w-full accent-blue-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="flex justify-between text-sm text-gray-600 mb-1">
+                      <span>Return to skill (δ₀):</span>
+                      <span className="font-mono">{delta0.toFixed(2)}</span>
+                    </label>
+                    <input
+                      type="range"
+                      min="0"
+                      max="2"
+                      step="0.1"
+                      value={delta0}
+                      onChange={(e) => setDelta0(parseFloat(e.target.value))}
+                      className="w-full accent-blue-500"
+                    />
+                  </div>
+
+                  <h3 className="font-medium text-gray-600 text-sm border-b pb-1 mt-4">Destination Wages</h3>
+                  
+                  <div>
+                    <label className="flex justify-between text-sm text-gray-600 mb-1">
+                      <span>Base wage (μ₁):</span>
+                      <span className="font-mono">{mu1.toFixed(2)}</span>
+                    </label>
+                    <input
+                      type="range"
+                      min="4"
+                      max="7"
+                      step="0.1"
+                      value={mu1}
+                      onChange={(e) => setMu1(parseFloat(e.target.value))}
+                      className="w-full accent-red-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="flex justify-between text-sm text-gray-600 mb-1">
+                      <span>Return to skill (δ₁):</span>
+                      <span className="font-mono">{delta1.toFixed(2)}</span>
+                    </label>
+                    <input
+                      type="range"
+                      min="0"
+                      max="2"
+                      step="0.1"
+                      value={delta1}
+                      onChange={(e) => setDelta1(parseFloat(e.target.value))}
+                      className="w-full accent-red-500"
+                    />
+                  </div>
+                </div>
+
+                {/* Current assumptions */}
+                <div className="mt-4 p-3 bg-gray-50 rounded-lg text-xs">
+                  <h4 className="font-semibold text-gray-700 mb-2">Model Conditions:</h4>
+                  <div className="space-y-1">
+                    <p className={delta0 > delta1 ? 'text-green-600' : 'text-red-600'}>
+                      {delta0 > delta1 ? '✓' : '✗'} δ₀ &gt; δ₁ (higher return to skill at origin)
+                    </p>
+                    <p className={mu1 > mu0 ? 'text-green-600' : 'text-red-600'}>
+                      {mu1 > mu0 ? '✓' : '✗'} μ₁ &gt; μ₀ (higher base wage at destination)
+                    </p>
+                    <p className={mu1 - mu0 < Math.exp(muPi) ? 'text-green-600' : 'text-red-600'}>
+                      {mu1 - mu0 < Math.exp(muPi) ? '✓' : '✗'} μ₁ − μ₀ &lt; exp(μ<sub>π</sub>) (large fixed costs)
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Explanation panel */}
+            <div className="mt-6 bg-white rounded-xl shadow-lg p-6">
+              <h2 className="text-lg font-semibold text-gray-700 mb-3">Understanding Selection Patterns</h2>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="p-4 bg-red-50 rounded-lg border border-red-200">
+                  <h3 className="font-semibold text-red-800 mb-2">Negative Selection</h3>
+                  <p className="text-sm text-red-700">
+                    When δ<sub>π</sub> = 0 (constant costs) and fixed costs are small, 
+                    <strong> low-skilled workers commute</strong> because the skill premium 
+                    difference (δ₀ &gt; δ₁) makes staying more attractive for skilled workers.
+                  </p>
+                </div>
+                <div className="p-4 bg-amber-50 rounded-lg border border-amber-200">
+                  <h3 className="font-semibold text-amber-800 mb-2">Intermediate Selection</h3>
+                  <p className="text-sm text-amber-700">
+                    When δ<sub>π</sub> &gt; 0 (decreasing costs) but moderate, and fixed costs are large,
+                    <strong> middle-skilled workers commute</strong>. Low-skilled are blocked by 
+                    fixed costs; high-skilled prefer origin's higher returns.
+                  </p>
+                </div>
+                <div className="p-4 bg-green-50 rounded-lg border border-green-200">
+                  <h3 className="font-semibold text-green-800 mb-2">Positive Selection</h3>
+                  <p className="text-sm text-green-700">
+                    When δ'<sub>π</sub> is large (strongly decreasing costs, e.g., car ownership) and 
+                    fixed costs are large, <strong>skilled workers commute</strong>. Their 
+                    lower commuting costs overcome the skill premium differential.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="mt-6 text-center text-gray-500 text-sm">
+              <p>Picado (2026) - "Who Works Where? Commuting Flows and Selection. Evidence from Costa Rica"</p>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    ReactDOM.render(<CommutingSelectionVisualization />, document.getElementById('root'));
+  </script>
+</body>
+</html>
